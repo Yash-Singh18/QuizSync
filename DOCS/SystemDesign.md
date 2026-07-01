@@ -122,8 +122,8 @@ sequenceDiagram
 
   C->>A: POST /answer { question_id, option_id }
   A->>A: now <= deadline + grace ? option valid ?
-  A->>A: latency = now - started_at ; correct? ; points
-  A->>D: BEGIN; INSERT submission ON CONFLICT (pid,qid) DO NOTHING;<br/>UPDATE participant SET score+=p, time+=lat, idx+=1; COMMIT
+  A->>A: latency = now - started_at &#59; correct? &#59; points
+  A->>D: BEGIN&#59; INSERT submission ON CONFLICT (pid,qid) DO NOTHING&#59;<br/>UPDATE participant SET score+=p, time+=lat, idx+=1&#59; COMMIT
   A->>R: ZADD room:{id}:lb composite pid   %% cache, after commit
   A-->>C: ack (no correctness during live window)
 
