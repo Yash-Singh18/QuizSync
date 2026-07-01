@@ -179,5 +179,5 @@ These are intentional, justified redundancies — not modeling mistakes:
 3. **`room_result`** is a materialized final snapshot of the leaderboard so standings stay queryable forever after Redis evicts and even if underlying rows change.
 4. **`submission.room_id`** duplicates `participant.room_id` purely so room-scoped queries (and partitioning) avoid an extra join.
 
-**Implementation note:** the production DDL in the system design collapses **`option`** back into `question.options` (jsonb) + `question.correct_option_ids` (jsonb), and stores `submission.selected_option_id` as a plain id. That's a denormalization of *this* model chosen for single-fetch question reads and to keep correct answers in a server-only column. The trade-off: you lose per-option referential integrity and SQL-level analytics on options. If you want clean option-level reporting or stricter integrity, implement the normalized `option` relation above instead — both are valid; pick per your reporting needs.
 
+-- Yash 

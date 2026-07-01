@@ -329,12 +329,4 @@ A singleton process (leader-elected via a Redis lock; **all transitions idempote
 - **Observability** → metrics on submissions/sec, WS connections, broadcast latency, Redis/PG latency; alerts.
 - **Headroom moves (only when needed):** shard rooms across Redis instances by `hash(room_id)`; partition `submissions` by `room_id` or time; add HTTP/WS replicas freely (stateless). Load-test a single huge room early.
 
----
-
-## 13. Suggested build order
-1. **Core, no realtime.** Schema + host room creation/questions + join + linear self-paced play with server-side `started_at`, scoring, idempotent submissions, expiry auto-record. Prove correctness single-player.
-2. **Live leaderboard.** Redis ZSET + composite score + WS connection + the snapshot broadcaster + per-user rank. Watch a board move.
-3. **Scheduling + shared start.** Lobby, scheduler transitions, `go`+Q1 push at T0, `T_end` sweep, finalize → `room_results`.
-4. **Reliability + scale hardening.** Reconnect/resync, rate limits, leader election, Redis-rebuild routine, load test a 5–10k room, then shard/partition if the test demands it.
-
-Build phase 1 fully before adding realtime — it's far easier to verify scoring correctness without sockets in the way.
+-- Yash
