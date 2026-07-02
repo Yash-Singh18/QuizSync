@@ -14,7 +14,7 @@ services:
         sync: false
       - key: REDIS_URL
         fromService:
-          type: keyvalue
+          type: redis
           name: quizsync-kv
           property: connectionString
 
@@ -33,7 +33,7 @@ services:
           name: quizsync-api
           property: hostport
 
-keyvalues:
-  - name: quizsync-kv
+  - type: redis
+    name: quizsync-kv
     plan: starter
     ipAllowList: []
