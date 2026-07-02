@@ -12,11 +12,6 @@ services:
         sync: false
       - key: SUPABASE_KEY
         sync: false
-      - key: REDIS_URL
-        fromService:
-          type: redis
-          name: quizsync-kv
-          property: connectionString
 
   - type: web
     name: quizsync-web
@@ -33,7 +28,7 @@ services:
           name: quizsync-api
           property: hostport
 
-  - type: redis
-    name: quizsync-kv
-    plan: starter
-    ipAllowList: []
+# Key Value (Redis) service intentionally omitted until Phase 2 — needs a paid
+# plan and there's no payment method on the Render account yet. Redis stays
+# local-only (docker-compose) for now; backend/app/config.py already defaults
+# REDIS_URL to localhost so this is a no-op until then.
