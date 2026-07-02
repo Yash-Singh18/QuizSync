@@ -1,0 +1,39 @@
+services:
+  - type: web
+    name: quizsync-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: starter
+    autoDeploy: true
+    branch: release
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: quizsync-kv
+          property: connectionString
+
+  - type: web
+    name: quizsync-web
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    autoDeploy: true
+    branch: release
+    envVars:
+      - key: VITE_API_URL
+        fromService:
+          type: web
+          name: quizsync-api
+          property: hostport
+
+keyvalues:
+  - name: quizsync-kv
+    plan: starter
+    ipAllowList: []
