@@ -41,11 +41,16 @@ function HostApp({ onExit }) {
   // Listen for OAuth redirect
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
-      if (data.session) setSession(data.session)
+      if (data.session) {
+        setSession(data.session)
+        setStage(prev => prev === 'auth' ? 'build' : prev)
+      }
     })
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
       setSession(s)
-      if (s) setStage('build')
+      // INITIAL_SESSION (page reload after redirect) and SIGNED_IN both mean "logged in"
+      if (s) setStage(prev => prev === 'auth' ? 'build' : prev)
+      if (event === 'SIGNED_OUT') setStage('auth')
     })
     return () => sub.subscription.unsubscribe()
   }, [])
@@ -300,10 +305,24 @@ function RoomBuilder({ token, onRoomReady, onSignOut, onError, error }) {
 
 function ReadyScreen({ room, token, onStart, onError, error }) {
   const [starting, setStarting] = useState(false)
+  const [participants, setParticipants] = useState([])
+  const intervalRef = useRef(null)
+
+  useEffect(() => {
+    function poll() {
+      api(`/rooms/${room.id}/results`, { token })
+        .then(setParticipants)
+        .catch(() => {})
+    }
+    poll()
+    intervalRef.current = setInterval(poll, 2000)
+    return () => clearInterval(intervalRef.current)
+  }, [])
 
   async function handleStart() {
     setStarting(true)
     onError(null)
+    clearInterval(intervalRef.current)
     try {
       const liveRoom = await api(`/rooms/${room.id}/start`, { token, json: {}, method: 'POST' })
       onStart(liveRoom)
@@ -314,13 +333,30 @@ function ReadyScreen({ room, token, onStart, onError, error }) {
   }
 
   return (
-    <main className="center">
+    <main className="builder">
       <h2>{room.title}</h2>
       <p>Share this join code with participants:</p>
       <div className="join-code">{room.join_code}</div>
+
+      <div className="participant-list">
+        <strong>{participants.length} joined</strong>
+        {participants.length > 0 && (
+          <ul>
+            {participants.map(p => (
+              <li key={p.participant_id}>{p.display_name}</li>
+            ))}
+          </ul>
+        )}
+        {participants.length === 0 && <p className="muted">Waiting for participants…</p>}
+      </div>
+
       {error && <p className="error">{error}</p>}
-      <button className="btn primary" onClick={handleStart} disabled={starting}>
-        {starting ? 'Starting…' : 'Start Quiz Now'}
+      <button
+        className="btn primary"
+        onClick={handleStart}
+        disabled={starting || participants.length === 0}
+      >
+        {starting ? 'Starting…' : `Start Quiz (${participants.length} players)`}
       </button>
     </main>
   )
@@ -400,17 +436,28 @@ function ResultsScreen({ room, token, onDone }) {
 // ══════════════════════════════════════════════════════════════════════════
 
 function ParticipantApp({ onExit }) {
-  const [stage, setStage] = useState('join') // join | play | done
+  const [stage, setStage] = useState('join') // join | lobby | play | done
   const [session, setSession] = useState(null)  // { session_token, room_id, code }
   const [error, setError] = useState(null)
 
   if (stage === 'join') {
     return (
       <JoinScreen
-        onJoined={(s) => { setSession(s); setStage('play') }}
+        onJoined={(s) => { setSession(s); setStage('lobby') }}
         onError={setError}
         error={error}
         onBack={onExit}
+      />
+    )
+  }
+
+  if (stage === 'lobby') {
+    return (
+      <LobbyScreen
+        session={session}
+        onStart={() => setStage('play')}
+        onError={setError}
+        error={error}
       />
     )
   }
@@ -434,6 +481,40 @@ function ParticipantApp({ onExit }) {
       />
     )
   }
+}
+
+// ── LobbyScreen ───────────────────────────────────────────────────────────
+
+function LobbyScreen({ session, onStart, onError }) {
+  const intervalRef = useRef(null)
+
+  useEffect(() => {
+    function poll() {
+      api(`/rooms/${session.code}/me`, {
+        method: 'GET',
+        params: { token: session.session_token },
+      })
+        .then((data) => {
+          if (data.room_status === 'live') {
+            clearInterval(intervalRef.current)
+            onStart()
+          }
+        })
+        .catch(() => {})
+    }
+
+    poll()
+    intervalRef.current = setInterval(poll, 2000)
+    return () => clearInterval(intervalRef.current)
+  }, [])
+
+  return (
+    <main className="center">
+      <h2>You're in! 🎉</h2>
+      <p className="muted">Waiting for the host to start the quiz…</p>
+      <div className="spinner" />
+    </main>
+  )
 }
 
 // ── JoinScreen ────────────────────────────────────────────────────────────

@@ -304,4 +304,5 @@ def get_me(code: str, token: str):
         time_total_ms=participant["time_total_ms"],
         current_question_index=participant["current_question_index"],
         rank=rank,
+        room_status=room["status"],
     )

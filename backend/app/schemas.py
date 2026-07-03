@@ -123,3 +123,4 @@ class MeResponse(BaseModel):
     time_total_ms: int
     current_question_index: int
     rank: int | None = None
+    room_status: str = ""
