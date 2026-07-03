@@ -2,6 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
+from app.play import router as play_router
+from app.rooms import router as rooms_router
 from app.supabase_client import get_supabase
 
 app = FastAPI(title="QuizSync API")
@@ -12,6 +14,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(rooms_router)
+app.include_router(play_router)
 
 
 @app.get("/health")
