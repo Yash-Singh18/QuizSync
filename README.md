@@ -1,3 +1,3 @@
-Please Dont readme
-## refer DOCS for system design and relational model.
-## Im building - trust me
+# QuizSync
+
+**QuizSync** is a highly scalable, real-time multiplayer quiz and contest platform (live at [quizsync-web.onrender.com](https://quizsync-web.onrender.com/)) built with a React frontend, FastAPI backend, Redis for pub/sub and leaderboard caching, and Supabase for relational database storage and authentication. We have successfully completed the implementation of Phase 0, setting up the walking skeleton, Dockerized local environment, and automated deployment pipeline. For more technical details on the architecture and data structures, please refer to the [System Design](DOCS/SystemDesign.md) and the [Relational Model](DOCS/RelationalModel.md).
