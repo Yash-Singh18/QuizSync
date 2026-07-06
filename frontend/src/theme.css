@@ -1,0 +1,127 @@
+/* theme.css - Centralized Color Theme based on ColorTheme.md */
+
+:root {
+  /* ===========================
+     LIGHT MODE (Default)
+     =========================== */
+  --bg-primary: #F8FAFC;
+  --bg-secondary: #F1F5F9;
+  --bg-card: #FFFFFF;
+  --bg-elevated: #F1F5F9;
+  --bg-hover: #E2E8F0;
+  --border: #CBD5E1;
+
+  --text-primary: #0F172A;
+  --text-secondary: #334155;
+  --text-muted: #64748B;
+  --text-disabled: #94A3B8;
+  --text-inverted: #FFFFFF;
+
+  --accent: #3B82F6;
+  --accent-hover: #2563EB;
+  --accent-glow: #60A5FA;
+  --accent-dark: #1D4ED8;
+  --shadow-accent-glow: 0 0 10px #38BDF855;
+  --accent-bg: #DBEAFE;
+
+  --success: #16A34A;
+  --success-bright: #22C55E;
+  --success-glow: #4ADE80;
+  --shadow-success-glow: 0 0 10px #00FF8855;
+  --success-bg: #F0FDF4;
+
+  --error: #DC2626;
+  --error-bright: #EF4444;
+  --error-glow: #F87171;
+  --shadow-error-glow: 0 0 10px #FF3B3B55;
+  --error-bg: #FEF2F2;
+  --error-border: #FECACA;
+
+  --badge-live-bg: #DCFCE7;
+  --badge-live-text: #166534;
+
+  --gold: #EAB308;
+  --gold-light: #FDE047;
+  --gold-glow: #CA8A04;
+  --shadow-gold-glow: 0 0 12px #EAB30888;
+
+  --silver: #94A3B8;
+  --silver-light: #CBD5E1;
+  --silver-glow: #64748B;
+  --shadow-silver-glow: 0 0 12px #94A3B888;
+
+  --bronze: #B45309;
+  --bronze-light: #D97706;
+  --bronze-glow: #92400E;
+  --shadow-bronze-glow: 0 0 12px #B4530988;
+
+  --rank-text: #0284C7;
+  --rank-border: #38BDF8;
+  --rank-hover: #BAE6FD;
+  --rank-glow: #0EA5E9;
+  --shadow-rank-glow: 0 0 10px #0284C755;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* ===========================
+       DARK MODE (From ColorTheme.md)
+       =========================== */
+    --bg-primary: #09090B;
+    --bg-secondary: #111827;
+    --bg-card: #18181B;
+    --bg-elevated: #1F2937;
+    --bg-hover: #27272A;
+    --border: #2E3440;
+
+    --text-primary: #F8FAFC;
+    --text-secondary: #CBD5E1;
+    --text-muted: #94A3B8;
+    --text-disabled: #64748B;
+    --text-inverted: #FFFFFF;
+
+    --accent: #3B82F6;
+    --accent-hover: #60A5FA;
+    --accent-glow: #38BDF8;
+    --accent-dark: #2563EB;
+    --shadow-accent-glow: 0 0 15px #38BDF8AA;
+    --accent-bg: #1E3A8A;
+
+    --success: #22C55E;
+    --success-bright: #4ADE80;
+    --success-glow: #00FF88;
+    --shadow-success-glow: 0 0 18px #00FF88AA;
+    --success-bg: #062F16;
+
+    --error: #EF4444;
+    --error-bright: #FF4D6D;
+    --error-glow: #FF3B3B;
+    --shadow-error-glow: 0 0 18px #FF3B3BAA;
+    --error-bg: #450A0A;
+    --error-border: #7F1D1D;
+
+    --badge-live-bg: #14532D;
+    --badge-live-text: #4ADE80;
+
+    --gold: #FFD700;
+    --gold-light: #FFE66D;
+    --gold-glow: #FACC15;
+    --shadow-gold-glow: 0 0 22px #FFD70099;
+
+    --silver: #C0C0C0;
+    --silver-light: #E5E7EB;
+    --silver-glow: #F8FAFC;
+    --shadow-silver-glow: 0 0 18px #FFFFFF88;
+
+    --bronze: #CD7F32;
+    --bronze-light: #E09F5A;
+    --bronze-glow: #FFB26B;
+    --shadow-bronze-glow: 0 0 18px #CD7F3288;
+
+    --rank-text: #38BDF8;
+    --rank-border: #2563EB;
+    --rank-hover: #1E3A8A;
+    --rank-glow: #60A5FA;
+    --shadow-rank-glow: 0 0 12px #38BDF866;
+  }
+}

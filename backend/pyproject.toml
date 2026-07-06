@@ -8,6 +8,7 @@ dependencies = [
     "uvicorn[standard]>=0.32",
     "supabase>=2.9",
     "pydantic-settings>=2.6",
+    "redis>=5.0",
 ]
 
 [build-system]

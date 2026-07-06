@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { supabase } from './lib/supabase'
 import { api } from './lib/api'
+import { useRoomSocket } from './lib/useRoomSocket'
 import './App.css'
 
 // ── top-level role switcher ───────────────────────────────────────────────
@@ -365,29 +366,24 @@ function ReadyScreen({ room, token, onStart, onError, error }) {
 // ── LiveMonitor ────────────────────────────────────────────────────────────
 
 function LiveMonitor({ room, token, onEnd, onError, error }) {
-  const [results, setResults] = useState([])
+  const [initialResults, setInitialResults] = useState([])
   const [ending, setEnding] = useState(false)
-  const intervalRef = useRef(null)
+  const { board, connected } = useRoomSocket({ code: room.join_code, role: 'host', token })
 
+  // One-time fill until the first WS snapshot arrives
   useEffect(() => {
-    fetchResults()
-    intervalRef.current = setInterval(fetchResults, 3000)
-    return () => clearInterval(intervalRef.current)
+    api(`/rooms/${room.id}/results`, { token })
+      .then(setInitialResults)
+      .catch(() => {})
   }, [])
 
-  async function fetchResults() {
-    try {
-      const data = await api(`/rooms/${room.id}/results`, { token })
-      setResults(data)
-    } catch (_) {}
-  }
+  const rows = board.length ? board : initialResults
 
   async function handleEnd() {
     setEnding(true)
     onError(null)
     try {
       const closedRoom = await api(`/rooms/${room.id}/end`, { token, json: {}, method: 'POST' })
-      clearInterval(intervalRef.current)
       onEnd(closedRoom)
     } catch (err) {
       onError(err.message)
@@ -399,10 +395,10 @@ function LiveMonitor({ room, token, onEnd, onError, error }) {
     <main className="builder">
       <header className="builder-header">
         <h2>Live — {room.title}</h2>
-        <span className="badge live">LIVE</span>
+        <span className="badge live">{connected ? 'LIVE' : 'RECONNECTING…'}</span>
       </header>
       {error && <p className="error">{error}</p>}
-      <Leaderboard rows={results} />
+      <Leaderboard rows={rows} />
       <button className="btn danger" onClick={handleEnd} disabled={ending}>
         {ending ? 'Ending…' : 'End Quiz'}
       </button>
@@ -575,6 +571,12 @@ function PlayScreen({ session, onDone, onError, error }) {
   const [remaining, setRemaining] = useState(null)
   const [loading, setLoading] = useState(true)
   const timerRef = useRef(null)
+  const fetchingRef = useRef(false)
+  const { you, total } = useRoomSocket({
+    code: session.code,
+    role: 'participant',
+    token: session.session_token,
+  })
 
   useEffect(() => {
     fetchNext()
@@ -582,6 +584,10 @@ function PlayScreen({ session, onDone, onError, error }) {
   }, [])
 
   async function fetchNext() {
+    // Guard against concurrent chains (mount + answer + expiry can race);
+    // a second chain would orphan the first interval → runaway /next loop.
+    if (fetchingRef.current) return
+    fetchingRef.current = true
     setLoading(true)
     setSelected(null)
     setSubmitted(false)
@@ -607,12 +613,15 @@ function PlayScreen({ session, onDone, onError, error }) {
       const deadline = new Date(data.deadline).getTime()
       setQuestion(data)
 
-      // Countdown timer using absolute deadline
+      // Countdown timer using absolute deadline. Clear by captured id, not
+      // timerRef — timerRef may already point at a newer interval.
+      const intervalId = setInterval(tick, 250)
+      timerRef.current = intervalId
       function tick() {
         const msLeft = deadline - (Date.now() + offset)
         if (msLeft <= 0) {
           setRemaining(0)
-          clearInterval(timerRef.current)
+          clearInterval(intervalId)
           // Auto-advance after deadline
           setTimeout(fetchNext, 800)
         } else {
@@ -620,10 +629,15 @@ function PlayScreen({ session, onDone, onError, error }) {
         }
       }
       tick()
-      timerRef.current = setInterval(tick, 250)
     } catch (err) {
+      // Contest over (closed / past end) → final screen, don't retry
+      if (/room (is not live|has ended)|already finished/i.test(err.message)) {
+        onDone()
+        return
+      }
       onError(err.message)
     } finally {
+      fetchingRef.current = false
       setLoading(false)
     }
   }
@@ -655,7 +669,7 @@ function PlayScreen({ session, onDone, onError, error }) {
 
   if (!question) return <main className="center"><p>Waiting for question…</p></main>
 
-  const timerColor = remaining <= 5 ? '#e53e3e' : remaining <= 10 ? '#dd6b20' : '#38a169'
+  const timerColor = remaining <= 5 ? 'var(--error)' : remaining <= 10 ? 'var(--bronze)' : 'var(--success)'
 
   return (
     <main className="play">
@@ -677,6 +691,11 @@ function PlayScreen({ session, onDone, onError, error }) {
         ))}
       </div>
       {submitted && <p className="status-msg">Answer locked — loading next…</p>}
+      {you && (
+        <p className="rank-line muted">
+          You're #{you.rank} of {total} — {you.score_total} pts
+        </p>
+      )}
     </main>
   )
 }
@@ -729,7 +748,7 @@ function Leaderboard({ rows }) {
             <td>{r.display_name}</td>
             <td>{r.score_total}</td>
             <td>{(r.time_total_ms / 1000).toFixed(1)}</td>
-            <td>{r.status}</td>
+            <td>{r.status ?? '—'}</td>
           </tr>
         ))}
       </tbody>
