@@ -17,6 +17,14 @@ from app.schemas import (
     NextRequest,
     QuestionOut,
 )
+from app.leaderboard import (
+    composite,
+    lb_key,
+    names_key,
+    starts_key,
+    update_participant_score,
+)
+from app.redis_client import get_redis
 from app.scoring import score as compute_score
 from app.supabase_client import get_service_supabase
 
@@ -108,6 +116,14 @@ def join_room(body: JoinRequest):
     }).execute()
 
     p = res.data[0]
+
+    # Appear on the live board immediately (0 points, 0 time)
+    r = get_redis()
+    pipe = r.pipeline()
+    pipe.hset(names_key(room["id"]), p["id"], p["display_name"])
+    pipe.zadd(lb_key(room["id"]), {p["id"]: composite(0, 0)})
+    pipe.execute()
+
     return JoinResponse(
         session_token=str(p["session_token"]),
         participant_id=str(p["id"]),
@@ -152,17 +168,12 @@ def next_question(code: str, body: NextRequest):
         if question is None:
             break
 
-        # Get (or create) the canonical started_at for this question
-        started_at_raw = supa.rpc("start_question", {
-            "p_participant": participant["id"],
-            "p_question": question["id"],
-        }).execute().data
-
-        # Parse started_at
-        if isinstance(started_at_raw, str):
-            started_at = datetime.fromisoformat(started_at_raw)
-        else:
-            started_at = datetime.fromisoformat(str(started_at_raw))
+        # Get (or create) the canonical started_at for this question.
+        # HSETNX is idempotent: a retried /next returns the same deadline.
+        r = get_redis()
+        field = f"{participant['id']}:{question['id']}"
+        r.hsetnx(starts_key(room["id"]), field, now.isoformat())
+        started_at = datetime.fromisoformat(r.hget(starts_key(room["id"]), field))
         if started_at.tzinfo is None:
             started_at = started_at.replace(tzinfo=timezone.utc)
 
@@ -202,6 +213,9 @@ def next_question(code: str, body: NextRequest):
             "p_points": 0,
         }).execute()
 
+        # Reflect the new aggregates in the ZSET (after the Postgres commit)
+        update_participant_score(room["id"], participant["id"])
+
         # Refresh participant state (index was advanced by record_answer)
         participant = _get_participant(room["id"], body.session_token)
 
@@ -238,18 +252,12 @@ def submit_answer(code: str, body: AnswerRequest):
         raise HTTPException(status_code=409, detail="question_id does not match your current question")
 
     # Get started_at (must already exist — /next must have been called first)
-    qs_res = (
-        supa.table("question_starts")
-        .select("started_at")
-        .eq("participant_id", participant["id"])
-        .eq("question_id", question["id"])
-        .single()
-        .execute()
+    started_at_raw = get_redis().hget(
+        starts_key(room["id"]), f"{participant['id']}:{question['id']}"
     )
-    if not qs_res.data:
+    if not started_at_raw:
         raise HTTPException(status_code=409, detail="Call /next before /answer")
 
-    started_at_raw = qs_res.data["started_at"]
     started_at = datetime.fromisoformat(started_at_raw)
     if started_at.tzinfo is None:
         started_at = started_at.replace(tzinfo=timezone.utc)
@@ -283,6 +291,9 @@ def submit_answer(code: str, body: AnswerRequest):
         "p_is_correct": is_correct,
         "p_points": points,
     }).execute()
+
+    # Reflect the new aggregates in the ZSET (after the Postgres commit)
+    update_participant_score(room["id"], participant["id"])
 
     msg = "Expired — recorded as 0" if expired else "Recorded"
     return AnswerResponse(recorded=True, message=msg)

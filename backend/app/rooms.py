@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.auth import current_host
+from app.leaderboard import mark_room_active, mark_room_inactive, rebuild_room_zset
 from app.schemas import (
     QuestionIn,
     ResultRow,
@@ -195,6 +196,11 @@ def start_room(room_id: str, host_id: str = Depends(current_host)):
         "end_at": end_at.isoformat(),
         "updated_at": now.isoformat(),
     }).eq("id", room_id).execute()
+
+    # Broadcaster starts ticking this room; seed the board with lobby joiners
+    mark_room_active(room_id)
+    rebuild_room_zset(room_id)
+
     return res.data[0]
 
 
@@ -214,6 +220,9 @@ def end_room(room_id: str, host_id: str = Depends(current_host)):
         "status": "closed",
         "updated_at": _now_utc().isoformat(),
     }).eq("id", room_id).execute()
+
+    mark_room_inactive(room_id)
+
     return res.data[0]
 
 

@@ -1,12 +1,29 @@
+import asyncio
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.broadcaster import snapshot_loop
 from app.config import settings
 from app.play import router as play_router
+from app.redis_client import close_redis, get_redis
 from app.rooms import router as rooms_router
 from app.supabase_client import get_supabase
+from app.ws import router as ws_router
 
-app = FastAPI(title="QuizSync API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    stop_event = asyncio.Event()
+    broadcaster = asyncio.create_task(snapshot_loop(stop_event))
+    yield
+    stop_event.set()
+    await broadcaster
+    await close_redis()
+
+
+app = FastAPI(title="QuizSync API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -17,6 +34,7 @@ app.add_middleware(
 
 app.include_router(rooms_router)
 app.include_router(play_router)
+app.include_router(ws_router)
 
 
 @app.get("/health")
@@ -28,4 +46,9 @@ def health():
             supabase_ok = True
         except Exception:
             supabase_ok = False
-    return {"status": "ok", "supabase": supabase_ok}
+    redis_ok = False
+    try:
+        redis_ok = bool(get_redis().ping())
+    except Exception:
+        redis_ok = False
+    return {"status": "ok", "supabase": supabase_ok, "redis": redis_ok}
