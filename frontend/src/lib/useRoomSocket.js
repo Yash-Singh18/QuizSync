@@ -11,13 +11,17 @@ const MAX_BACKOFF_MS = 15000
  * @param {'participant'|'host'} opts.role
  * @param {string} opts.token - session_token (participant) or Supabase JWT (host)
  * @param {boolean} [opts.enabled=true]
- * @returns {{ board: array, you: object|null, total: number, connected: boolean }}
+ * @returns {{ board: array, you: object|null, total: number, connected: boolean,
+ *             roomState: object|null, go: object|null, finalized: object|null }}
  */
 export function useRoomSocket({ code, role, token, enabled = true }) {
   const [board, setBoard] = useState([])
   const [you, setYou] = useState(null)
   const [total, setTotal] = useState(0)
   const [connected, setConnected] = useState(false)
+  const [roomState, setRoomState] = useState(null) // latest lobby countdown tick
+  const [go, setGo] = useState(null)               // T0 release event (carries Q1)
+  const [finalized, setFinalized] = useState(null) // final board event
   const wsRef = useRef(null)
   const timersRef = useRef({ ping: null, reconnect: null })
   const backoffRef = useRef(1000)
@@ -48,6 +52,12 @@ export function useRoomSocket({ code, role, token, enabled = true }) {
           setBoard(msg.top)
           setYou(msg.you)
           setTotal(msg.total)
+        } else if (msg.type === 'room_state') {
+          setRoomState(msg)
+        } else if (msg.type === 'go') {
+          setGo(msg)
+        } else if (msg.type === 'finalized') {
+          setFinalized(msg)
         }
       }
 
@@ -70,5 +80,5 @@ export function useRoomSocket({ code, role, token, enabled = true }) {
     }
   }, [code, role, token, enabled])
 
-  return { board, you, total, connected }
+  return { board, you, total, connected, roomState, go, finalized }
 }

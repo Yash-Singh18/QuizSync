@@ -1,6 +1,6 @@
 """
-Snapshot broadcaster — in-process asyncio task (Phase 2; extracted to the
-Background Worker in Phase 3).
+Snapshot broadcaster — runs inside the background worker (app.worker)
+since Phase 3.
 
 Every tick it publishes ONE top-K snapshot per active room through Redis
 pub/sub, so fan-out volume is independent of submission rate and the path
