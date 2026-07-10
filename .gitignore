@@ -1,6 +1,9 @@
 PLAN.md
 CLAUDE.md
 .claude 
+phase1.md
+prep.md
+BUGREPORT.md
 
 # env / secrets
 .env

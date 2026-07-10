@@ -11,7 +11,9 @@ services:
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_KEY
-        sync: false
+        sync: false      # anon key
+      - key: SUPABASE_SERVICE_KEY
+        sync: false      # service-role key (never expose to client)
 
   - type: web
     name: quizsync-web
@@ -23,10 +25,11 @@ services:
     branch: release
     envVars:
       - key: VITE_API_URL
-        fromService:
-          type: web
-          name: quizsync-api
-          property: hostport
+        sync: false   # set to https://quizsync-api-vdjl.onrender.com in Render dashboard
+      - key: VITE_SUPABASE_URL
+        sync: false
+      - key: VITE_SUPABASE_ANON_KEY
+        sync: false
 
 # Key Value (Redis) service intentionally omitted until Phase 2 — needs a paid
 # plan and there's no payment method on the Render account yet. Redis stays
