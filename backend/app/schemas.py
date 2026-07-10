@@ -1,6 +1,7 @@
 """
-Pydantic request/response models for Phase 1.
-correct_option_ids is NEVER included in any response model.
+Pydantic request/response models.
+correct_option_ids is NEVER included in any response model, with one
+deliberate exception: ReviewQuestion, served only after finalization.
 """
 
 from __future__ import annotations
@@ -113,6 +114,32 @@ class ResultRow(BaseModel):
     score_total: int
     time_total_ms: int
     status: str
+
+
+class FinalStanding(BaseModel):
+    rank: int
+    participant_id: str
+    display_name: str
+    score_total: int
+    time_total_ms: int
+
+
+class ReviewQuestion(BaseModel):
+    """Post-finalization only — the one place correct answers are revealed."""
+    question_id: str
+    order_index: int
+    prompt: str
+    options: list[OptionOut]
+    correct_option_ids: list[str]
+    explanation: str | None = None
+    your_option_id: str | None = None
+    is_correct: bool | None = None
+    points_awarded: int | None = None
+
+
+class ReviewResponse(BaseModel):
+    results: list[FinalStanding]
+    questions: list[ReviewQuestion]
 
 
 class MeResponse(BaseModel):

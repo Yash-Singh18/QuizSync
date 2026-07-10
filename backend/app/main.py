@@ -1,10 +1,8 @@
-import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.broadcaster import snapshot_loop
 from app.config import settings
 from app.play import router as play_router
 from app.redis_client import close_redis, get_redis
@@ -12,14 +10,13 @@ from app.rooms import router as rooms_router
 from app.supabase_client import get_supabase
 from app.ws import router as ws_router
 
+# The snapshot broadcaster + scheduler run in the background worker
+# (app.worker) since Phase 3 — the web process only serves HTTP + WS.
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    stop_event = asyncio.Event()
-    broadcaster = asyncio.create_task(snapshot_loop(stop_event))
     yield
-    stop_event.set()
-    await broadcaster
     await close_redis()
 
 

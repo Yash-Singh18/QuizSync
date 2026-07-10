@@ -8,9 +8,11 @@ import string
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from postgrest.exceptions import APIError
 
 from app.auth import current_host
-from app.leaderboard import mark_room_active, mark_room_inactive, rebuild_room_zset
+from app.leaderboard import mark_room_inactive
+from app.lifecycle import go_live
 from app.schemas import (
     QuestionIn,
     ResultRow,
@@ -23,15 +25,18 @@ from app.supabase_client import get_service_supabase
 
 router = APIRouter(prefix="/rooms", tags=["rooms"])
 
-GRACE_MS = 2_000   # extra buffer on top of Σduration for end_at
-
 
 # ── helpers ───────────────────────────────────────────────────────────────
 
 def _get_room_or_404(room_id: str):
     supa = get_service_supabase()
-    res = supa.table("rooms").select("*").eq("id", room_id).single().execute()
-    if not res.data:
+    try:
+        res = supa.table("rooms").select("*").eq("id", room_id).maybe_single().execute()
+    except APIError as exc:
+        if exc.code == "22P02":  # malformed uuid in room_id
+            raise HTTPException(status_code=404, detail="Room not found")
+        raise
+    if res is None or not res.data:
         raise HTTPException(status_code=404, detail="Room not found")
     return res.data
 
@@ -161,6 +166,8 @@ def schedule_room(room_id: str, body: ScheduleRoom, host_id: str = Depends(curre
     _assert_owner(room, host_id)
     if room["status"] != "ready":
         raise HTTPException(status_code=409, detail="Room must be in 'ready' status to schedule")
+    if body.start_at <= _now_utc():
+        raise HTTPException(status_code=422, detail="start_at must be in the future")
 
     supa = get_service_supabase()
     res = supa.table("rooms").update({
@@ -173,35 +180,16 @@ def schedule_room(room_id: str, body: ScheduleRoom, host_id: str = Depends(curre
 
 @router.post("/{room_id}/start", response_model=RoomOut)
 def start_room(room_id: str, host_id: str = Depends(current_host)):
-    """Immediate start: T0 = now. Calculates end_at from question durations."""
+    """Immediate start: T0 = now. Same guarded transition the scheduler uses."""
     room = _get_room_or_404(room_id)
     _assert_owner(room, host_id)
     if room["status"] not in ("ready", "scheduled"):
         raise HTTPException(status_code=409, detail="Room must be 'ready' or 'scheduled' to start")
 
-    supa = get_service_supabase()
-    q_res = supa.table("questions").select("duration_ms").eq("room_id", room_id).execute()
-    if not q_res.data:
-        raise HTTPException(status_code=422, detail="No questions in room")
-
-    total_ms = sum(q["duration_ms"] for q in q_res.data)
-    now = _now_utc()
-    # end_at = T0 + Σduration + grace
-    from datetime import timedelta
-    end_at = now + timedelta(milliseconds=total_ms + GRACE_MS)
-
-    res = supa.table("rooms").update({
-        "status": "live",
-        "start_at": now.isoformat(),
-        "end_at": end_at.isoformat(),
-        "updated_at": now.isoformat(),
-    }).eq("id", room_id).execute()
-
-    # Broadcaster starts ticking this room; seed the board with lobby joiners
-    mark_room_active(room_id)
-    rebuild_room_zset(room_id)
-
-    return res.data[0]
+    live_room = go_live(room_id)
+    if live_room is None:
+        raise HTTPException(status_code=409, detail="Room already started")
+    return live_room
 
 
 @router.post("/{room_id}/end", response_model=RoomOut)

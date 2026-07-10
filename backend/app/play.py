@@ -6,16 +6,20 @@ Session tokens are issued at join and required on all subsequent calls.
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, status
+from postgrest.exceptions import APIError
 
 from app.schemas import (
     AnswerRequest,
     AnswerResponse,
     DoneResponse,
+    FinalStanding,
     JoinRequest,
     JoinResponse,
     MeResponse,
     NextRequest,
     QuestionOut,
+    ReviewQuestion,
+    ReviewResponse,
 )
 from app.leaderboard import (
     composite,
@@ -41,23 +45,35 @@ def _now_utc() -> datetime:
 
 def _get_room_by_code(code: str) -> dict:
     supa = get_service_supabase()
-    res = supa.table("rooms").select("*").eq("join_code", code).single().execute()
-    if not res.data:
+    res = supa.table("rooms").select("*").eq("join_code", code).execute()
+    rooms = res.data or []
+    if not rooms:
         raise HTTPException(status_code=404, detail="Room not found")
-    return res.data
+    # Codes are only unique among ACTIVE rooms — a finalized room can share a
+    # code with a newer one. Prefer the active room; else the most recent
+    # (so /review keeps working until the code is reused).
+    active = [r for r in rooms if r["status"] in ("ready", "scheduled", "live")]
+    if active:
+        return active[0]
+    return max(rooms, key=lambda r: r["created_at"])
 
 
 def _get_participant(room_id: str, session_token: str) -> dict:
     supa = get_service_supabase()
-    res = (
-        supa.table("participants")
-        .select("*")
-        .eq("room_id", room_id)
-        .eq("session_token", session_token)
-        .single()
-        .execute()
-    )
-    if not res.data:
+    try:
+        res = (
+            supa.table("participants")
+            .select("*")
+            .eq("room_id", room_id)
+            .eq("session_token", session_token)
+            .maybe_single()
+            .execute()
+        )
+    except APIError as exc:
+        if exc.code == "22P02":  # malformed uuid in session_token
+            raise HTTPException(status_code=401, detail="Invalid session token")
+        raise
+    if res is None or not res.data:
         raise HTTPException(status_code=401, detail="Invalid session token")
     return res.data
 
@@ -69,10 +85,10 @@ def _get_question_by_index(room_id: str, order_index: int) -> dict | None:
         .select("*")
         .eq("room_id", room_id)
         .eq("order_index", order_index)
-        .single()
+        .maybe_single()
         .execute()
     )
-    return res.data  # None if not found
+    return res.data if res else None  # None if not found
 
 
 def _question_count(room_id: str) -> int:
@@ -274,9 +290,16 @@ def submit_answer(code: str, body: AnswerRequest):
         latency_ms = question["duration_ms"]
         selected = None
     else:
+        if body.option_id not in {o["id"] for o in question["options"]}:
+            raise HTTPException(status_code=422, detail="Invalid option_id")
         correct_ids: list = question["correct_option_ids"]
         is_correct = body.option_id in correct_ids
-        latency_ms = max(0, int((now - started_at).total_seconds() * 1000))
+        # Clamp to duration: grace absorbs network latency, but aggregates
+        # should never exceed the expired-question latency (= full duration).
+        latency_ms = min(
+            max(0, int((now - started_at).total_seconds() * 1000)),
+            question["duration_ms"],
+        )
         points = compute_score(is_correct, latency_ms, question["duration_ms"], question["base_points"])
         selected = body.option_id
 
@@ -297,6 +320,75 @@ def submit_answer(code: str, body: AnswerRequest):
 
     msg = "Expired — recorded as 0" if expired else "Recorded"
     return AnswerResponse(recorded=True, message=msg)
+
+
+# ── review ────────────────────────────────────────────────────────────────
+
+@router.get("/rooms/{code}/review", response_model=ReviewResponse)
+def get_review(code: str, token: str):
+    """Final standings + correct answers/explanations + the participant's own
+    picks. Only served once the room is finalized — no leakage before T_end."""
+    room = _get_room_by_code(code)
+    participant = _get_participant(room["id"], token)
+    if room["status"] != "finalized":
+        raise HTTPException(status_code=409, detail="Results are not final yet")
+
+    supa = get_service_supabase()
+    results = (
+        supa.table("room_results")
+        .select("rank, participant_id, score_total, time_total_ms, participants(display_name)")
+        .eq("room_id", room["id"])
+        .order("rank")
+        .limit(50)
+        .execute()
+        .data
+        or []
+    )
+    questions = (
+        supa.table("questions")
+        .select("*")
+        .eq("room_id", room["id"])
+        .order("order_index")
+        .execute()
+        .data
+        or []
+    )
+    subs = (
+        supa.table("submissions")
+        .select("question_id, selected_option_id, is_correct, points_awarded")
+        .eq("participant_id", participant["id"])
+        .execute()
+        .data
+        or []
+    )
+    sub_by_q = {s["question_id"]: s for s in subs}
+
+    return ReviewResponse(
+        results=[
+            FinalStanding(
+                rank=row["rank"],
+                participant_id=str(row["participant_id"]),
+                display_name=row["participants"]["display_name"],
+                score_total=row["score_total"],
+                time_total_ms=row["time_total_ms"],
+            )
+            for row in results
+        ],
+        questions=[
+            ReviewQuestion(
+                question_id=str(q["id"]),
+                order_index=q["order_index"],
+                prompt=q["prompt"],
+                options=q["options"],
+                correct_option_ids=q["correct_option_ids"],
+                explanation=q["explanation"],
+                your_option_id=(sub_by_q.get(str(q["id"])) or {}).get("selected_option_id"),
+                is_correct=(sub_by_q.get(str(q["id"])) or {}).get("is_correct"),
+                points_awarded=(sub_by_q.get(str(q["id"])) or {}).get("points_awarded"),
+            )
+            for q in questions
+        ],
+    )
 
 
 # ── me ────────────────────────────────────────────────────────────────────

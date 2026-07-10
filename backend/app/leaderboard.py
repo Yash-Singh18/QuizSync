@@ -31,6 +31,11 @@ def channel(room_id: str) -> str:
     return f"room:{room_id}:lb"
 
 
+def state_channel(room_id: str) -> str:
+    """Lifecycle events: room_state (lobby countdown), go (T0 + Q1), finalized."""
+    return f"room:{room_id}:state"
+
+
 # ── composite score (SystemDesign §3.2) ──────────────────────────────────
 
 def composite(points_total: int, time_total_ms: int) -> float:
@@ -55,10 +60,10 @@ def update_participant_score(room_id: str, participant_id: str) -> None:
         supa.table("participants")
         .select("score_total, time_total_ms")
         .eq("id", participant_id)
-        .single()
+        .maybe_single()
         .execute()
     )
-    if not res.data:
+    if res is None or not res.data:
         return
     get_redis().zadd(
         lb_key(room_id),

@@ -307,6 +307,11 @@ function RoomBuilder({ token, onRoomReady, onSignOut, onError, error }) {
 function ReadyScreen({ room, token, onStart, onError, error }) {
   const [starting, setStarting] = useState(false)
   const [participants, setParticipants] = useState([])
+  const [startAt, setStartAt] = useState('')       // datetime-local value
+  const [scheduledRoom, setScheduledRoom] = useState(
+    room.status === 'scheduled' ? room : null
+  )
+  const [scheduling, setScheduling] = useState(false)
   const intervalRef = useRef(null)
 
   useEffect(() => {
@@ -320,6 +325,23 @@ function ReadyScreen({ room, token, onStart, onError, error }) {
     return () => clearInterval(intervalRef.current)
   }, [])
 
+  // Once scheduled, watch for the worker flipping the room live at T0
+  useEffect(() => {
+    if (!scheduledRoom) return
+    const id = setInterval(() => {
+      api(`/rooms/${room.id}`, { token })
+        .then((r) => {
+          if (r.status === 'live') {
+            clearInterval(id)
+            clearInterval(intervalRef.current)
+            onStart(r)
+          }
+        })
+        .catch(() => {})
+    }, 2000)
+    return () => clearInterval(id)
+  }, [scheduledRoom])
+
   async function handleStart() {
     setStarting(true)
     onError(null)
@@ -330,6 +352,23 @@ function ReadyScreen({ room, token, onStart, onError, error }) {
     } catch (err) {
       onError(err.message)
       setStarting(false)
+    }
+  }
+
+  async function handleSchedule() {
+    setScheduling(true)
+    onError(null)
+    try {
+      const r = await api(`/rooms/${room.id}/schedule`, {
+        token,
+        json: { start_at: new Date(startAt).toISOString() },
+        method: 'POST',
+      })
+      setScheduledRoom(r)
+    } catch (err) {
+      onError(err.message)
+    } finally {
+      setScheduling(false)
     }
   }
 
@@ -352,12 +391,35 @@ function ReadyScreen({ room, token, onStart, onError, error }) {
       </div>
 
       {error && <p className="error">{error}</p>}
+
+      {scheduledRoom ? (
+        <p className="scheduled-note">
+          Scheduled for <strong>{new Date(scheduledRoom.start_at).toLocaleString()}</strong>
+          {' '}— participants will be released automatically.
+        </p>
+      ) : (
+        <div className="schedule-row">
+          <input
+            type="datetime-local"
+            value={startAt}
+            onChange={e => setStartAt(e.target.value)}
+          />
+          <button
+            className="btn secondary"
+            onClick={handleSchedule}
+            disabled={!startAt || scheduling}
+          >
+            {scheduling ? 'Scheduling…' : 'Schedule'}
+          </button>
+        </div>
+      )}
+
       <button
         className="btn primary"
         onClick={handleStart}
         disabled={starting || participants.length === 0}
       >
-        {starting ? 'Starting…' : `Start Quiz (${participants.length} players)`}
+        {starting ? 'Starting…' : `Start Quiz Now (${participants.length} players)`}
       </button>
     </main>
   )
@@ -368,7 +430,7 @@ function ReadyScreen({ room, token, onStart, onError, error }) {
 function LiveMonitor({ room, token, onEnd, onError, error }) {
   const [initialResults, setInitialResults] = useState([])
   const [ending, setEnding] = useState(false)
-  const { board, connected } = useRoomSocket({ code: room.join_code, role: 'host', token })
+  const { board, connected, finalized } = useRoomSocket({ code: room.join_code, role: 'host', token })
 
   // One-time fill until the first WS snapshot arrives
   useEffect(() => {
@@ -376,6 +438,11 @@ function LiveMonitor({ room, token, onEnd, onError, error }) {
       .then(setInitialResults)
       .catch(() => {})
   }, [])
+
+  // Scheduler hit T_end and finalized the room
+  useEffect(() => {
+    if (finalized) onEnd({ ...room, status: 'finalized' })
+  }, [finalized])
 
   const rows = board.length ? board : initialResults
 
@@ -434,6 +501,7 @@ function ResultsScreen({ room, token, onDone }) {
 function ParticipantApp({ onExit }) {
   const [stage, setStage] = useState('join') // join | lobby | play | done
   const [session, setSession] = useState(null)  // { session_token, room_id, code }
+  const [initialQuestion, setInitialQuestion] = useState(null) // Q1 from the `go` event
   const [error, setError] = useState(null)
 
   if (stage === 'join') {
@@ -451,7 +519,7 @@ function ParticipantApp({ onExit }) {
     return (
       <LobbyScreen
         session={session}
-        onStart={() => setStage('play')}
+        onStart={(q) => { setInitialQuestion(q ?? null); setStage('play') }}
         onError={setError}
         error={error}
       />
@@ -462,6 +530,7 @@ function ParticipantApp({ onExit }) {
     return (
       <PlayScreen
         session={session}
+        initialQuestion={initialQuestion}
         onDone={() => setStage('done')}
         onError={setError}
         error={error}
@@ -483,7 +552,26 @@ function ParticipantApp({ onExit }) {
 
 function LobbyScreen({ session, onStart, onError }) {
   const intervalRef = useRef(null)
+  const startedRef = useRef(false)
+  const { roomState, go, connected } = useRoomSocket({
+    code: session.code,
+    role: 'participant',
+    token: session.session_token,
+  })
 
+  function release(question) {
+    if (startedRef.current) return
+    startedRef.current = true
+    clearInterval(intervalRef.current)
+    onStart(question)
+  }
+
+  // Primary release path: the `go` event at T0 carries Q1 — no /next stampede
+  useEffect(() => {
+    if (go) release(go.question)
+  }, [go])
+
+  // Slow fallback poll in case the socket missed the go event
   useEffect(() => {
     function poll() {
       api(`/rooms/${session.code}/me`, {
@@ -491,26 +579,37 @@ function LobbyScreen({ session, onStart, onError }) {
         params: { token: session.session_token },
       })
         .then((data) => {
-          if (data.room_status === 'live') {
-            clearInterval(intervalRef.current)
-            onStart()
-          }
+          if (data.room_status === 'live') release(null)
         })
         .catch(() => {})
     }
-
-    poll()
-    intervalRef.current = setInterval(poll, 2000)
+    intervalRef.current = setInterval(poll, 5000)
     return () => clearInterval(intervalRef.current)
   }, [])
+
+  const seconds = roomState?.seconds_to_start
 
   return (
     <main className="center">
       <h2>You're in! 🎉</h2>
-      <p className="muted">Waiting for the host to start the quiz…</p>
+      {seconds != null && seconds > 0 ? (
+        <>
+          <p className="muted">Quiz starts in</p>
+          <div className="lobby-countdown">{formatCountdown(seconds)}</div>
+        </>
+      ) : (
+        <p className="muted">Waiting for the quiz to start…</p>
+      )}
       <div className="spinner" />
+      {!connected && <p className="muted">Reconnecting…</p>}
     </main>
   )
+}
+
+function formatCountdown(totalSeconds) {
+  const m = Math.floor(totalSeconds / 60)
+  const s = totalSeconds % 60
+  return `${m}:${String(s).padStart(2, '0')}`
 }
 
 // ── JoinScreen ────────────────────────────────────────────────────────────
@@ -564,7 +663,7 @@ function JoinScreen({ onJoined, onError, error, onBack }) {
 
 // ── PlayScreen ────────────────────────────────────────────────────────────
 
-function PlayScreen({ session, onDone, onError, error }) {
+function PlayScreen({ session, initialQuestion, onDone, onError, error }) {
   const [question, setQuestion] = useState(null)
   const [selected, setSelected] = useState(null)
   const [submitted, setSubmitted] = useState(false)
@@ -572,16 +671,53 @@ function PlayScreen({ session, onDone, onError, error }) {
   const [loading, setLoading] = useState(true)
   const timerRef = useRef(null)
   const fetchingRef = useRef(false)
-  const { you, total } = useRoomSocket({
+  const { you, total, finalized } = useRoomSocket({
     code: session.code,
     role: 'participant',
     token: session.session_token,
   })
 
   useEffect(() => {
-    fetchNext()
+    // Q1 arrives in the `go` event — skip the /next stampede at T0
+    if (initialQuestion) beginQuestion(initialQuestion)
+    else fetchNext()
     return () => clearInterval(timerRef.current)
   }, [])
+
+  // Scheduler closed + finalized the room → final screen
+  useEffect(() => {
+    if (finalized) onDone()
+  }, [finalized])
+
+  function beginQuestion(data) {
+    // Compute clock offset: server_now vs local now
+    const serverNow = new Date(data.server_now).getTime()
+    const localNow = Date.now()
+    const offset = serverNow - localNow   // positive means server is ahead
+
+    const deadline = new Date(data.deadline).getTime()
+    setQuestion(data)
+    setSelected(null)
+    setSubmitted(false)
+    setLoading(false)
+
+    // Countdown timer using absolute deadline. Clear by captured id, not
+    // timerRef — timerRef may already point at a newer interval.
+    const intervalId = setInterval(tick, 250)
+    timerRef.current = intervalId
+    function tick() {
+      const msLeft = deadline - (Date.now() + offset)
+      if (msLeft <= 0) {
+        setRemaining(0)
+        clearInterval(intervalId)
+        // Auto-advance after deadline
+        setTimeout(fetchNext, 800)
+      } else {
+        setRemaining(Math.ceil(msLeft / 1000))
+      }
+    }
+    tick()
+  }
 
   async function fetchNext() {
     // Guard against concurrent chains (mount + answer + expiry can race);
@@ -589,8 +725,6 @@ function PlayScreen({ session, onDone, onError, error }) {
     if (fetchingRef.current) return
     fetchingRef.current = true
     setLoading(true)
-    setSelected(null)
-    setSubmitted(false)
     onError(null)
     clearInterval(timerRef.current)
 
@@ -605,30 +739,7 @@ function PlayScreen({ session, onDone, onError, error }) {
         return
       }
 
-      // Compute clock offset: server_now vs local now
-      const serverNow = new Date(data.server_now).getTime()
-      const localNow = Date.now()
-      const offset = serverNow - localNow   // positive means server is ahead
-
-      const deadline = new Date(data.deadline).getTime()
-      setQuestion(data)
-
-      // Countdown timer using absolute deadline. Clear by captured id, not
-      // timerRef — timerRef may already point at a newer interval.
-      const intervalId = setInterval(tick, 250)
-      timerRef.current = intervalId
-      function tick() {
-        const msLeft = deadline - (Date.now() + offset)
-        if (msLeft <= 0) {
-          setRemaining(0)
-          clearInterval(intervalId)
-          // Auto-advance after deadline
-          setTimeout(fetchNext, 800)
-        } else {
-          setRemaining(Math.ceil(msLeft / 1000))
-        }
-      }
-      tick()
+      beginQuestion(data)
     } catch (err) {
       // Contest over (closed / past end) → final screen, don't retry
       if (/room (is not live|has ended)|already finished/i.test(err.message)) {
@@ -704,6 +815,7 @@ function PlayScreen({ session, onDone, onError, error }) {
 
 function DoneScreen({ session, onExit }) {
   const [me, setMe] = useState(null)
+  const [review, setReview] = useState(null)
 
   useEffect(() => {
     api(`/rooms/${session.code}/me`, {
@@ -714,8 +826,25 @@ function DoneScreen({ session, onExit }) {
       .catch(() => {})
   }, [])
 
+  // Final board + correct answers unlock once the room is finalized;
+  // /review returns 409 until then, so retry on a slow poll.
+  useEffect(() => {
+    let timer
+    let cancelled = false
+    function fetchReview() {
+      api(`/rooms/${session.code}/review`, {
+        method: 'GET',
+        params: { token: session.session_token },
+      })
+        .then((data) => { if (!cancelled) setReview(data) })
+        .catch(() => { if (!cancelled) timer = setTimeout(fetchReview, 3000) })
+    }
+    fetchReview()
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [])
+
   return (
-    <main className="center">
+    <main className="builder">
       <h2>🎉 You're done!</h2>
       {me && (
         <div className="done-stats">
@@ -723,6 +852,43 @@ function DoneScreen({ session, onExit }) {
           <p>Time: <strong>{(me.time_total_ms / 1000).toFixed(1)}s</strong></p>
           {me.rank && <p>Rank: <strong>#{me.rank}</strong></p>}
         </div>
+      )}
+
+      {!review && <p className="muted">Waiting for final results…</p>}
+      {review && (
+        <>
+          <h3>Final Standings</h3>
+          <Leaderboard rows={review.results} />
+          <h3>Answer Review</h3>
+          {review.questions.map(q => (
+            <div key={q.question_id} className="review-card">
+              <p className="review-prompt">
+                <strong>Q{q.order_index + 1}.</strong> {q.prompt}
+                <span className={`review-points ${q.is_correct ? 'good' : 'bad'}`}>
+                  {q.points_awarded ?? 0} pts
+                </span>
+              </p>
+              <div className="review-options">
+                {q.options.map(opt => {
+                  const correct = q.correct_option_ids.includes(opt.id)
+                  const yours = q.your_option_id === opt.id
+                  return (
+                    <div
+                      key={opt.id}
+                      className={`review-option ${correct ? 'correct' : ''} ${yours ? 'yours' : ''}`}
+                    >
+                      {opt.text}
+                      {correct && ' ✓'}
+                      {yours && !correct && ' ✗ (your pick)'}
+                      {yours && correct && ' (your pick)'}
+                    </div>
+                  )
+                })}
+              </div>
+              {q.explanation && <p className="muted review-explanation">{q.explanation}</p>}
+            </div>
+          ))}
+        </>
       )}
       <button className="btn primary" onClick={onExit}>Back to Home</button>
     </main>

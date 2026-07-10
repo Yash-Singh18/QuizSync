@@ -78,12 +78,17 @@ async def _reader(ws: WebSocket) -> None:
 
 
 async def _pusher(ws: WebSocket, pubsub, room_id: str, participant_id: str | None) -> None:
-    """Forward each broadcaster snapshot, adding the participant's own rank."""
+    """Forward each broadcaster snapshot, adding the participant's own rank.
+    Lifecycle events (room_state / go / finalized) pass through as-is."""
     r = get_async_redis()
     async for message in pubsub.listen():
         if message["type"] != "message":
             continue
         snapshot = json.loads(message["data"])
+
+        if snapshot.get("type") != "lb_snapshot":
+            await ws.send_json(snapshot)
+            continue
 
         you = None
         if participant_id is not None:
@@ -117,7 +122,8 @@ async def room_socket(ws: WebSocket, code: str, role: str = "participant", token
 
     await ws.accept()
     pubsub = get_async_redis().pubsub()
-    await pubsub.subscribe(lb.channel(room_id))
+    channels = (lb.channel(room_id), lb.state_channel(room_id))
+    await pubsub.subscribe(*channels)
     tasks = [
         asyncio.create_task(_reader(ws)),
         asyncio.create_task(_pusher(ws, pubsub, room_id, participant_id)),
@@ -133,5 +139,5 @@ async def room_socket(ws: WebSocket, code: str, role: str = "participant", token
     finally:
         for task in tasks:
             task.cancel()
-        await pubsub.unsubscribe(lb.channel(room_id))
+        await pubsub.unsubscribe(*channels)
         await pubsub.aclose()
